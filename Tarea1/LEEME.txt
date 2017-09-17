@@ -29,6 +29,8 @@ Imagen:
 - 10% perdida, 100ms delay: Imagen seriamente alterada
 - 10% perdida, 200ms delay: Imagen seriamente alterada (irreconocible)
 
+Se probó también con una canción de 30 segundos (800 kB) y un archivo pdf de unos 200 kB. Ninguno de los dos llegó entero en ninguna de las pruebas y, por tanto, no se pudo sacar conclusiones al respecto más que sobre 150 kB el sistema parecía fallar.
+
 Integrantes:
 
 -Diego Baño
