@@ -1,0 +1,35 @@
+Instrucciones de ejecucion:
+
+Lanzar en el siguiente orden:
+
+- ./bws
+- ./bwss servername port1 port2
+- ./bwcs
+- ./bwc filename1 filename2 servername port
+
+Esto conectara por defecto a bwc en localhost puertos 2001 para tcp y 2000 para udp
+
+Se realizaron las pruebas con un archivo de texto de 2 kB y una imagen de 120 kB.
+
+Texto:
+
+- 0% perdida, 0ms delay: Mensaje llego perfecto
+- 0% perdida, 100ms delay: Mensaje llego perfecto
+- 0% perdida, 200ms delay: Mensaje llego perfecto
+- 10% perdida, 0ms delay: Mensaje llego perfecto
+- 10% perdida, 100ms delay: Mensaje llego perfecto
+- 10% perdida, 200ms delay: Mensaje llego perfecto
+
+Imagen:
+
+- 0% perdida, 0ms delay: Mensaje llego perfecto
+- 0% perdida, 100ms delay: Mensaje llego perfecto
+- 0% perdida, 200ms delay: Mensaje llego perfecto
+- 10% perdida, 0ms delay: Imagen levemente alterada
+- 10% perdida, 100ms delay: Imagen seriamente alterada
+- 10% perdida, 200ms delay: Imagen seriamente alterada (irreconocible)
+
+Integrantes:
+
+-Diego Baño
+-Daniel Diomedi

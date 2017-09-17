@@ -49,33 +49,30 @@ int main (void) {
 
 }
 
-void* bwc_a_bwcs() {    
-
+void* bwc_a_bwcs() {   
+    int cnt; 
+    write(sUDP, buffer1, 0);
 	for(;;) {
-    	if(Dread(sTCP, buffer1, BUFFER_LENGTH) <= 0) { //leer desde bwc 00000
-    		fprintf(stderr, "FIN DE LECTURA\n");
-    		fprintf(stderr, "FIN DE LECTURA\n");
+    	if((cnt = Dread(sTCP, buffer1, BUFFER_LENGTH)) <= 0) { //leer desde bwc 00000
     		fprintf(stderr, "FIN DE LECTURA\n");
     	    break;
     	}
-    	fprintf(stderr, "\" Traspasando de sTCP a sUDP: \n %s \"\n  FIN TRASPASO \n \n", buffer1);
-        write(sUDP, buffer1, BUFFER_LENGTH); //enviar datos al servidor
+    	fprintf(stderr, "Traspasando de sTCP a sUDP\n");
+        write(sUDP, buffer1, cnt); //enviar datos al servidor
     }
     write(sUDP, buffer1, 0);
     return NULL;
 }
 
 void* bwcs_a_bwc() {
-
+    int cnt;
     for(;;) {
-		if(read(sUDP, buffer2, BUFFER_LENGTH) <= 0) { //leer desde bwc
-			fprintf(stderr, "FIN DE LECTURA\n");
-			fprintf(stderr, "FIN DE LECTURA\n");
-			fprintf(stderr, "FIN DE LECTURA\n");
-    	    break;
-    	}
-    	fprintf(stderr, "Traspasando de sUDP a sTCP:  \n \" %s \"\n", buffer1);
-        Dwrite(sTCP, buffer2, BUFFER_LENGTH); //enviar datos al servidor
+        fprintf(stderr, "Traspasando de sUDP a sTCP\n");
+        if((cnt = read(sUDP, buffer2, BUFFER_LENGTH)) <= 0) { //leer desde bwc
+            fprintf(stderr, "FIN DE LECTURA\n");
+            break;
+        }
+        Dwrite(sTCP, buffer2, cnt); //enviar datos al servidor
     }
     Dwrite(sTCP, buffer2, 0);
     return NULL;
