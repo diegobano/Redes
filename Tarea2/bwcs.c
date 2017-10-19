@@ -2,19 +2,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <string.h>
 #include <signal.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/poll.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include "jsocket6.4.h"
 #include "Data.h"
-#include <pthread.h>
+
+#define MAX_ACKS 10
 
 char buffer1[BUFFER_LENGTH];
-char out[BUFFER_LENGTH+6];
+char out1[BUFFER_LENGTH+6];
+char out2[DHDR];
 char buffer2[BUFFER_LENGTH];
-char in[BUFFER_LENGTH+6];
+char in1[DHDR];
+char in2[BUFFER_LENGTH+6];
+char acks[MAX_ACKS][DHDR];
+
 int contador;
 int fd; //archivo
 int n; //indicador de cuanto se escribe
@@ -22,8 +30,11 @@ int bytes, cnt, packs; //contador de bytes, lecturas/escrituras ,packs enviados
 int sTCP, sUDP;//identificador del servidor
 int seq_num_out, seq_num_in;
 fd_set rfds;
-struct timeval timeout;
 int retval;
+int last_wrong, last_right;
+
+pthread_mutex_t reading;
+pthread_cond_t no_data;
 
 void* bwc_a_bwcs();
 void* bwcs_a_bwc();
@@ -31,9 +42,10 @@ void* bwcs_a_bwc();
 int main (void) {
 
 	pthread_t t1, t2;
+    pthread_mutex_init(&reading, NULL);
+    pthread_cond_init(&no_data, NULL);
 	contador = 0;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
+    last_wrong = 0, last_right = 0;
 
 	//conexion desde bwc a bwcs
 	int s = j_socket_tcp_bind("2001");
@@ -47,6 +59,7 @@ int main (void) {
 	fprintf(stderr, "socket UDP conectado\n");
 
     seq_num_out = 0;
+    seq_num_in = -1;
 	pthread_create(&t1, NULL, bwc_a_bwcs, NULL);
 	pthread_create(&t2, NULL, bwcs_a_bwc, NULL);
 
@@ -56,10 +69,9 @@ int main (void) {
 	close(sUDP);
 	Dclose(sTCP);
 	return 0;
-
 }
 
-int to_int_seq(unsigned char b) {
+int to_int_seq_inplace(char* b) {
     int res=0;
     int i;
 
@@ -69,7 +81,7 @@ int to_int_seq(unsigned char b) {
     return res;
 }
 
-void to_char_seq(int seq, unsigned char *buf) {
+void to_char_seq_inplace(int seq, char *buf) {
     int i;
     int res = seq;
 
@@ -77,45 +89,118 @@ void to_char_seq(int seq, unsigned char *buf) {
         buf[i] = (res % 10) + '0';
         res /= 10;
     }
-// fprintf(stderr, "to_char %d -> %c, %c, %c, %c, %c\n", seq, buf[0], buf[1], buf[2], buf[3], buf[4]);
 }
 
-/* 
-int select(int nfds, fd_set *readfds, fd_set *writefds,
-                  fd_set *exceptfds, struct timeval *timeout);
-*/
 
-void* bwc_a_bwcs() {   
-    int cnt;
-    out[DTYPE] = 'D';
-    to_char_seq(seq_num_out, out);
-    write(sUDP, out, 6);
-	for(;;) {
-        FD_ZERO(&rfds);
-        FD_SET(, &rfds);
-
-    	if((cnt = Dread(sTCP, buffer1, BUFFER_LENGTH)) <= 0) { //leer desde bwc 00000
-    		fprintf(stderr, "FIN DE LECTURA\n");
-    	    break;
-    	}
-    	fprintf(stderr, "Traspasando de sTCP a sUDP\n");
-        write(sUDP, buffer1, cnt); //enviar datos al servidor
+void* bwc_a_bwcs() {
+    int cnt, ack_num, not_acked = 1;
+    struct timeval ti, curr_time;
+    out1[DTYPE] = 'D';
+    to_char_seq_inplace(seq_num_out, out1);
+    write(sUDP, out1, 6);
+    for(;;) {
+        if((cnt = Dread(sTCP, buffer1, BUFFER_LENGTH)) <= 0) { //leer desde bwc 00000
+            fprintf(stderr, "FIN DE LECTURA DESDE TCP\n");
+            break;
+        }
+        strncpy(out1 + DHDR, buffer1, cnt);
+        fprintf(stderr, "Traspasando de sTCP a sUDP\n");
+        to_char_seq_inplace(seq_num_out, out1);
+        pthread_mutex_lock(&reading);
+        do {
+            write(sUDP, out1, cnt + DHDR); //enviar datos al servidor
+            printf("Esperando ack de %d\n", seq_num_out);
+            
+            gettimeofday(&ti, NULL);
+            while (1) {
+                gettimeofday(&curr_time, NULL);
+                if (curr_time.tv_sec - ti.tv_sec >= 1) {
+                    break;
+                }
+                if (last_right != last_wrong) {
+                    strcpy(in1, acks[last_right]);
+                    last_right = (last_right + 1) % MAX_ACKS;
+                    printf("%s\n", in1);
+                    ack_num = to_int_seq_inplace(in1);
+                    printf("ack recibido para %d\n", ack_num);
+                    if (ack_num != seq_num_out) {
+                        printf("ack distinto al esperado: %d\n", ack_num);
+                        break;
+                    } else {
+                        seq_num_out++;
+                        not_acked = 0;
+                        break;
+                    }
+                }
+            }
+        } while (not_acked);
+        not_acked = 1;
     }
-    write(sUDP, buffer1, 0);
+
+    printf("Enviando fin de mensajes\n");
+    to_char_seq_inplace(seq_num_out, out1);
+    do {
+        write(sUDP, out1, DHDR); //enviar datos al servidor
+        gettimeofday(&ti, NULL);
+        while (1) {
+            gettimeofday(&curr_time, NULL);
+            if (curr_time.tv_sec - ti.tv_sec >= 1) {
+                break;
+            }
+            if (last_right != last_wrong) {
+                strcpy(in1, acks[last_right]);
+                last_right = (last_right + 1) % MAX_ACKS;
+                printf("%s\n", in1);
+                ack_num = to_int_seq_inplace(in1);
+                printf("ack recibido para %d\n", ack_num);
+                if (ack_num != seq_num_out) {
+                    printf("ack distinto al esperado: %d\n", ack_num);
+                    break;
+                } else {
+                    seq_num_out++;
+                    not_acked = 0;
+                    break;
+                }
+            }
+        }
+    } while (not_acked);
+        
+    printf("Terminando escritura a sUDP\n");
+    pthread_cond_signal(&no_data);
+    pthread_mutex_unlock(&reading);
     return NULL;
 }
 
 void* bwcs_a_bwc() {
-    int cnt;
+    int cnt, next_seq;
     for(;;) {
-        fprintf(stderr, "Traspasando de sUDP a sTCP\n");
-        if((cnt = read(sUDP, buffer2, BUFFER_LENGTH)) <= 0) { //leer desde bwc
+        if((cnt = read(sUDP, in2, BUFFER_LENGTH + DHDR)) <= 0) { //leer desde bwc
             fprintf(stderr, "FIN DE LECTURA\n");
             break;
         }
-        Dwrite(sTCP, buffer2, cnt); //enviar datos al servidor
+        pthread_mutex_unlock(&reading);
+        if (in2[DTYPE] == 'A') {
+            printf("ACK encontrado: %s, SEQ: %d\n", in2, seq_num_out);
+            strncpy(acks[last_wrong], in2, DHDR);
+            last_wrong = (last_wrong + 1) % MAX_ACKS;
+        } else {
+            next_seq = to_int_seq_inplace(in2);
+            if (next_seq == seq_num_in + 1) {
+                strncpy(buffer2, in2 + DHDR, cnt - DHDR);
+                strncpy(out2, in2, 6);
+                out2[DTYPE] = 'A';
+                Dwrite(sTCP, buffer2, cnt - DHDR); //enviar datos al servidor
+                write(sUDP, out2, DHDR);
+                seq_num_in = next_seq;
+            } else if (next_seq == seq_num_in) {
+                out2[DTYPE] = 'A';
+                to_char_seq_inplace(seq_num_in, out2);
+                write(sUDP, out2, DHDR);
+            } else {
+                printf("wat\n");
+            }
+        }
     }
     Dwrite(sTCP, buffer2, 0);
     return NULL;
 }
-
