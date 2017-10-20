@@ -63,7 +63,9 @@ int main (void) {
 	pthread_create(&t1, NULL, bwc_a_bwcs, NULL);
 	pthread_create(&t2, NULL, bwcs_a_bwc, NULL);
 
+    printf("Esperando a t1\n");
 	pthread_join(t1, NULL);
+    printf("Esperando a t2\n");
 	pthread_join(t2, NULL);
 
 	close(sUDP);
@@ -106,7 +108,6 @@ void* bwc_a_bwcs() {
         strncpy(out1 + DHDR, buffer1, cnt);
         fprintf(stderr, "Traspasando de sTCP a sUDP\n");
         to_char_seq_inplace(seq_num_out, out1);
-        pthread_mutex_lock(&reading);
         do {
             write(sUDP, out1, cnt + DHDR); //enviar datos al servidor
             printf("Esperando ack de %d\n", seq_num_out);
@@ -166,8 +167,6 @@ void* bwc_a_bwcs() {
     } while (not_acked);
         
     printf("Terminando escritura a sUDP\n");
-    pthread_cond_signal(&no_data);
-    pthread_mutex_unlock(&reading);
     return NULL;
 }
 
@@ -178,7 +177,6 @@ void* bwcs_a_bwc() {
             fprintf(stderr, "FIN DE LECTURA\n");
             break;
         }
-        pthread_mutex_unlock(&reading);
         if (in2[DTYPE] == 'A') {
             printf("ACK encontrado: %s, SEQ: %d\n", in2, seq_num_out);
             strncpy(acks[last_wrong], in2, DHDR);
@@ -199,8 +197,13 @@ void* bwcs_a_bwc() {
             } else {
                 printf("wat\n");
             }
+            if (cnt <= 6) {
+                printf("Mensaje vacío final\n");
+                break;
+            }
         }
     }
+    printf("Enviando mensaje final\n");
     Dwrite(sTCP, buffer2, 0);
     return NULL;
 }
