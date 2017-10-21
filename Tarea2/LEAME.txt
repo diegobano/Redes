@@ -1,0 +1,15 @@
+El archivo bwcs se debe compilar y luego ejecutar como ./bwcs
+
+Se ejecutaron pruebas con un archivo de texto de 7 KB y otro de 6 MB consiguiendo archivos en perfecto estado a la vuelta con poco tiempo de demora (con 0% de pérdida)
+
+Con un 10% de pérdida, los archivos llegaron perfectamente también pero el tiempo que se demoraba en enviar y devolver los archivos subió considerablemente.
+
+Con un 30% de pérdida se repitió la misma historia, recibiendo el archivo intacto pero demorándose aun más tiempo.
+
+Extrañamente, al enviar una imagen en vez de un archivo de texto, el resultado obtenido poseía el mismo tamaño que el original, es decir, que llegan y se reciben todos los mensajes, sin embargo, no es posible visualizar el archivo.
+
+Integrantes:
+Diego Baño
+Daniel Diomedi
+
+GitHub: http://github.com/diegobano/Redes

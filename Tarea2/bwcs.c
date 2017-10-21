@@ -119,7 +119,7 @@ void* bwc_a_bwcs() {
                     break;
                 }
                 if (last_right != last_wrong) {
-                    strcpy(in1, acks[last_right]);
+                    strncpy(in1, acks[last_right], 6);
                     last_right = (last_right + 1) % MAX_ACKS;
                     printf("%s\n", in1);
                     ack_num = to_int_seq_inplace(in1);
