@@ -15,23 +15,28 @@
 
 #define MAX_ACKS 10
 
-char buffer1[BUFFER_LENGTH];
-char out1[BUFFER_LENGTH+6];
-char out2[DHDR];
-char buffer2[BUFFER_LENGTH];
-char in1[DHDR];
-char in2[BUFFER_LENGTH+6];
+// uso de bcw_a_bwcs
+char buffer1[BUFFER_LENGTH]; //buffer de entrada para leer desde bwc
+char out1[BUFFER_LENGTH+6]; //buffer de salida para escribir en bwcs
+char in1[DHDR]; //ack de entrada a bwcs
+
+//uso de bwcs_a_bwc
+char buffer2[BUFFER_LENGTH]; //buffer de salida para escribir en bwc
+char out2[DHDR]; //ack de salida desde bwcs
+char in2[BUFFER_LENGTH+6]; //buffer de entrada para leer desde bwcs
+
+// arreglo con acks
 char acks[MAX_ACKS][DHDR];
+int last_wrong, last_right; //contadores de ack esperado para arreglo de acks
 
 int contador;
 int fd; //archivo
 int n; //indicador de cuanto se escribe
-int bytes, cnt, packs; //contador de bytes, lecturas/escrituras ,packs enviados    
+int bytes, cnt, packs; //contador de bytes, lecturas/escrituras, packs enviados    
 int sTCP, sUDP;//identificador del servidor
-int seq_num_out, seq_num_in;
-fd_set rfds;
+int seq_num_out, seq_num_in; //numeros de secuencia de salida y entrada
+fd_set rfds; //???
 int retval;
-int last_wrong, last_right;
 
 pthread_mutex_t reading;
 pthread_cond_t no_data;
@@ -97,74 +102,77 @@ void to_char_seq_inplace(int seq, char *buf) {
 void* bwc_a_bwcs() {
     int cnt, ack_num, not_acked = 1;
     struct timeval ti, curr_time;
-    out1[DTYPE] = 'D';
-    to_char_seq_inplace(seq_num_out, out1);
-    write(sUDP, out1, 6);
+    //proceso de recibir datos de bwc via socket TCP
+    out1[DTYPE] = 'D'; //paqueta de datos
+    to_char_seq_inplace(seq_num_out, out1); //se escribe num de seq en out1
+    write(sUDP, out1, 6); //escribir out1 en sUDP, header?
     for(;;) {
         if((cnt = Dread(sTCP, buffer1, BUFFER_LENGTH)) <= 0) { //leer desde bwc 00000
             fprintf(stderr, "FIN DE LECTURA DESDE TCP\n");
-            break;
+            break; //no hay mas que recibir
         }
-        strncpy(out1 + DHDR, buffer1, cnt);
+        //se escribio lo que llego de sTCP en buffer1
+        strncpy(out1 + DHDR, buffer1, cnt); //se copian datos de buffer1 en out1 + offset_de_header
         fprintf(stderr, "Traspasando de sTCP a sUDP\n");
-        to_char_seq_inplace(seq_num_out, out1);
-        do {
+        to_char_seq_inplace(seq_num_out, out1); //se escribe numero de secuencia en paquete
+        do { //hacer esto mientras no llegue ack esperado
             write(sUDP, out1, cnt + DHDR); //enviar datos al servidor
             printf("Esperando ack de %d\n", seq_num_out);
             
             gettimeofday(&ti, NULL);
             while (1) {
                 gettimeofday(&curr_time, NULL);
-                if (curr_time.tv_sec - ti.tv_sec >= 1) {
+                if (curr_time.tv_sec - ti.tv_sec >= 1) { //si ha pasado mas de un segundo (timeout)
                     break;
                 }
-                if (last_right != last_wrong) {
-                    strncpy(in1, acks[last_right], 6);
-                    last_right = (last_right + 1) % MAX_ACKS;
+                if (last_right != last_wrong) { //llego ack nuevo yaay
+                    strncpy(in1, acks[last_right], 6); //copiar ultimo ack bueno en in1
+                    last_right = (last_right + 1) % MAX_ACKS; //siguiente ack
                     printf("%s\n", in1);
-                    ack_num = to_int_seq_inplace(in1);
+                    ack_num = to_int_seq_inplace(in1); //extraigo numero de secuencia
                     printf("ack recibido para %d\n", ack_num);
-                    if (ack_num != seq_num_out) {
+                    if (ack_num != seq_num_out) { //no es el que esperada m3n
                         printf("ack distinto al esperado: %d\n", ack_num);
                         break;
-                    } else {
-                        seq_num_out++;
-                        not_acked = 0;
+                    } else { //me llego mi amiwo ack esperado
+                        seq_num_out++; //movemos al siguiente
+                        not_acked = 0; //has been acked c:
                         break;
                     }
                 }
             }
-        } while (not_acked);
-        not_acked = 1;
+        } while (not_acked); //mientras no llego mi ack esperado
+        not_acked = 1; //reset condicion
     }
 
+    //proceso de enviar datos recolectados a bwcs via socket UDP
     printf("Enviando fin de mensajes\n");
-    to_char_seq_inplace(seq_num_out, out1);
-    do {
+    to_char_seq_inplace(seq_num_out, out1); //se escribe de nuevo dado que num de seq cambio 
+    do { //hacer esto mientras no llegue ack esperado
         write(sUDP, out1, DHDR); //enviar datos al servidor
         gettimeofday(&ti, NULL);
         while (1) {
             gettimeofday(&curr_time, NULL);
-            if (curr_time.tv_sec - ti.tv_sec >= 1) {
+            if (curr_time.tv_sec - ti.tv_sec >= 1) { //si ha pasado mas de un segundo (timeout)
                 break;
             }
-            if (last_right != last_wrong) {
-                strcpy(in1, acks[last_right]);
-                last_right = (last_right + 1) % MAX_ACKS;
+            if (last_right != last_wrong) { //llego ack nuevo yaay
+                strcpy(in1, acks[last_right]); //copiar ultimo ack bueno en in1
+                last_right = (last_right + 1) % MAX_ACKS; //siguiente ack
                 printf("%s\n", in1);
-                ack_num = to_int_seq_inplace(in1);
+                ack_num = to_int_seq_inplace(in1); //extraigo numero de secuencia
                 printf("ack recibido para %d\n", ack_num);
-                if (ack_num != seq_num_out) {
+                if (ack_num != seq_num_out) { //no es el que esperada m3n
                     printf("ack distinto al esperado: %d\n", ack_num);
                     break;
-                } else {
-                    seq_num_out++;
-                    not_acked = 0;
+                } else { //me llego mi amiwo ack esperado
+                    seq_num_out++; //movemos al siguiente
+                    not_acked = 0; //has been acked c:
                     break;
                 }
             }
         }
-    } while (not_acked);
+    } while (not_acked); //mientras no llego mi ack esperado
         
     printf("Terminando escritura a sUDP\n");
     return NULL;
@@ -172,38 +180,41 @@ void* bwc_a_bwcs() {
 
 void* bwcs_a_bwc() {
     int cnt, next_seq;
+    //proceso de recibir datos de bwcs via socket UDP 
+    //y escribirlos en bwc via socketTCP
     for(;;) {
         if((cnt = read(sUDP, in2, BUFFER_LENGTH + DHDR)) <= 0) { //leer desde bwc
             fprintf(stderr, "FIN DE LECTURA\n");
-            break;
+            break; //no hay mas que recibir
         }
-        if (in2[DTYPE] == 'A') {
+        //se escribio lo que llego de sUDP en in2
+        if (in2[DTYPE] == 'A') { //si paquete entrante es de confirmacion
             printf("ACK encontrado: %s, SEQ: %d\n", in2, seq_num_out);
-            strncpy(acks[last_wrong], in2, DHDR);
-            last_wrong = (last_wrong + 1) % MAX_ACKS;
-        } else {
-            next_seq = to_int_seq_inplace(in2);
-            if (next_seq == seq_num_in + 1) {
-                strncpy(buffer2, in2 + DHDR, cnt - DHDR);
-                strncpy(out2, in2, 6);
-                out2[DTYPE] = 'A';
-                Dwrite(sTCP, buffer2, cnt - DHDR); //enviar datos al servidor
-                write(sUDP, out2, DHDR);
+            strncpy(acks[last_wrong], in2, DHDR); //se copia ack recibido en arreglo de acks
+            last_wrong = (last_wrong + 1) % MAX_ACKS; //se actualiza nuevo ack recibido
+        } else { //paquete es de datos
+            next_seq = to_int_seq_inplace(in2); //extraer siguiente numero de secuencia
+            if (next_seq == seq_num_in + 1) { //si es el siguiente que viene (mantener orden)
+                strncpy(buffer2, in2 + DHDR, cnt - DHDR); //copiar datos de in2 a buffer2 (sin contar header)
+                strncpy(out2, in2, 6); //copiar datos de in2 a out2
+                out2[DTYPE] = 'A'; //confirmacion pa socket UDP
+                Dwrite(sTCP, buffer2, cnt - DHDR); //enviar datos en buffer2 a socket TCP 
+                write(sUDP, out2, DHDR); //se escribe paquete en socketUDP
                 seq_num_in = next_seq;
-            } else if (next_seq == seq_num_in) {
-                out2[DTYPE] = 'A';
-                to_char_seq_inplace(seq_num_in, out2);
-                write(sUDP, out2, DHDR);
-            } else {
-                printf("wat\n");
+            } else if (next_seq == seq_num_in) { //si es el mismo que se tiene
+                out2[DTYPE] = 'A'; //confirmacion
+                to_char_seq_inplace(seq_num_in, out2); //se escribe numero de secuencia en paquete
+                write(sUDP, out2, DHDR); //se escribe header en socketUDP
+            } else { // paquete invalido, se descarta
+                printf("Paquete descartado\n");
             }
-            if (cnt <= 6) {
+            if (cnt <= 6) { //mensaje pa cerrar
                 printf("Mensaje vacío final\n");
                 break;
             }
         }
     }
     printf("Enviando mensaje final\n");
-    Dwrite(sTCP, buffer2, 0);
+    Dwrite(sTCP, buffer2, 0); //para cerrar se envia paquete vacio
     return NULL;
 }
