@@ -71,7 +71,7 @@ void close_bufbox(BUFBOX *box) {
 }
 
 void delete_bufbox(BUFBOX *box) {
-    int i;
+    //int i;
 
 /*
     sem_destroy(&box->vacios);
