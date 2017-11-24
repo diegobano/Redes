@@ -17,6 +17,7 @@
 
 // uso de bcw_a_bwcs
 char buffer1[WIN_SZ][BUFFER_LENGTH+6]; //buffer de entrada para leer desde bwc
+int cnt[WIN_SZ]; //tamaño de cada paquete
 char out1[BUFFER_LENGTH+6]; //ventana de salida para escribir en bwcs
 char in1[DHDR]; //ack de entrada a bwcs
 
@@ -100,56 +101,81 @@ void to_char_seq_inplace(int seq, char *buf) {
 }
 
 
+int timeout, inside, curr_pos;
+/* Tratamiento de la señal SIGALRM.
+ * Escribe en pantalla que ha llegado la señal
+ */
+void resend_all_packets (int id) {
+    printf ("Recibida señal\n");
+    while (timeout && i < inside) { //enviamos todos los paquetes dentro de la ventana
+        int index = (curr_pos + i) % WIN_SZ; //siguiente paquete en la ventana
+        write(sUDP, buffer1[index], cnt[index] + DHDR); //enviar datos al servidor                
+        printf("Esperando ack de %d\n", ini_win_seq_num + i);
+        i++;
+    }
+    alarm(TIMEOUT);    
+}
+
 void* bwc_a_bwcs() {
-    int cnt[WIN_SZ], ack_num, not_acked = 1;
+    //int kk = 0;
+    signal (SIGALRM, resend_all_packets);
+    int ack_num, not_acked = 1;
+    int all_read = 0;
     struct timeval ti, curr_time;
-    int timeout = 1, i = 0; //se pone por defecto en 1 para que se envie todo al principio
+    timeout = 1; 
+    int i = 0; //se pone por defecto en 1 para que se envie todo al principio
     //proceso de recibir datos de bwc via socket TCP y enviarlo a socketUDP
     ini_win_seq_num = seq_num_out;
     end_win_seq_num = seq_num_out + WIN_SZ;
-    int inside = 0, curr_pos = 0, next_pos = 0;
-    while (i++ < WIN_SZ) {
+    int next_pos = 0;
+    inside = 0; curr_pos = 0;
+    out1[DTYPE] = 'D'; //paqueta de datos
+    to_char_seq_inplace(seq_num_out, out1); //se escribe num de seq en buffer1[i]        
+    while (i < WIN_SZ) {
         buffer1[i][DTYPE] = 'D'; //paqueta de datos    
-        to_char_seq_inplace(seq_num_out, buffer1[i]); //se escribe num de seq en buffer1[i]        
+        i++;
+        //to_char_seq_inplace(ini_win_seq_num + i, buffer1[i]); //se escribe num de seq en buffer1[i]        
     }        
-    write(sUDP, buffer1[0], 6); //escribir buffer1[0] en sUDP
+    write(sUDP, out1, DHDR); //escribir out1 en sUDP
     for(;;) {
-        while(inside < WIN_SZ){ //llenamos paquetes para enviar a ventana
-            if((cnt[next_pos % WIN_SZ] = Dread(sTCP, buffer1[next_pos] + DHDR, BUFFER_LENGTH)) <= 0) { //leer desde bwc 00000                
+        alarm(TIMEOUT);
+        //enviamos toda la ventana si 
+        while(!all_read && inside < WIN_SZ) { //llenamos paquetes para enviar a ventana
+            printf("ping\n");
+            if((cnt[next_pos] = Dread(sTCP, buffer1[next_pos] + DHDR, BUFFER_LENGTH)) <= 0) { //leer desde bwc 00000                
                 fprintf(stderr, "FIN DE LECTURA DESDE TCP\n");
+                all_read = 1;
                 break; //no hay mas que recibir
             }
-            //printf("En ventana: %d\n", inside);
+            printf("En ventana: %d\n", inside);
             to_char_seq_inplace(ini_win_seq_num + inside, buffer1[next_pos]); //se escribe numero de secuencia en paquete    
-            next_pos++; next_pos %= WIN_SZ; inside++;            
+            write(sUDP, buffer1[next_pos], cnt[next_pos] + DHDR); //enviar datos al servidor
+            printf("Esperando ack de %d\n", ini_win_seq_num + i);
+            //printf("Entran %d bytes, contenido: %s\n", cnt[next_pos], buffer1[next_pos]);
+            next_pos++; next_pos %= WIN_SZ; inside++;
         }
         if(inside == 0) break; //no queda nah mas que enviar
 
         //se escribio lo que llego de sTCP en buffer1
-        //strncpy(out1 + DHDR, buffer1, cnt); //se copian datos de buffer1 en out1 + offset_de_header
+        //strncpy(out1 + DHDR, buffer1, cnt); //se copian datos de buffer1 en  out1 + offset_de_header
         fprintf(stderr, "Traspasando de sTCP a sUDP\n");
-        
+        //return NULL;
         do { //hacer esto mientras no llegue ack esperado            
             i = 0;
-            while (timeout && i < inside) { //enviamos todos los paquetes dentro de la ventana
-                int index = (curr_pos + i) % WIN_SZ; //siguiente paquete en la ventana
-                write(sUDP, buffer1[index], cnt[index] + DHDR); //enviar datos al servidor                
-                printf("Esperando ack de %d\n", ini_win_seq_num + i);
-                i++;
-            }
+            /*
             if(!timeout) {
                 int index = (curr_pos + inside - 1) % WIN_SZ; //hay un nuevo paquete para enviar
                 write(sUDP, buffer1[index], cnt[index] + DHDR); //enviar datos al servidor
             } else timeout = 0;
-
-            gettimeofday(&ti, NULL);            
+            */
+            //gettimeofday(&ti, NULL);            
             while (1) { //esperamos confirmacion de recepcion
-                gettimeofday(&curr_time, NULL);
-                if (curr_time.tv_sec - ti.tv_sec >= 1) { //si ha pasado mas de un segundo (timeout)
+                //gettimeofday(&curr_time, NULL);
+                /*if (curr_time.tv_sec - ti.tv_sec >= 1) { //si ha pasado mas de un segundo (timeout)
                     printf("Timeout!\n");
                     timeout = 1;
                     break;
-                }
+                }*/
                 if (last_right != last_wrong) { //llego ack nuevo yaay
                     strncpy(in1, acks[last_right], 6); //copiar ultimo ack bueno en in1
                     last_right = (last_right + 1) % MAX_ACKS; //siguiente ack
@@ -169,12 +195,15 @@ void* bwc_a_bwcs() {
                 }
             }
         } while (not_acked); //mientras no llego mi ack esperado
+        //if(kk > 20) return NULL;
+        //else kk++;
         not_acked = 1; //reset condicion
     }
     
     //Intento de confirmacion el cierre de la conexion
     printf("Enviando fin de mensajes\n");
-    to_char_seq_inplace(seq_num_out, out1); //se escribe de nuevo dado que num de seq cambio 
+    seq_num_out = ini_win_seq_num;
+    to_char_seq_inplace(ini_win_seq_num, out1); //se escribe de nuevo dado que num de seq cambio 
     do { //hacer esto mientras no llegue ack esperado
         write(sUDP, out1, DHDR); //enviar datos al servidor
         gettimeofday(&ti, NULL);
@@ -186,7 +215,7 @@ void* bwc_a_bwcs() {
             if (last_right != last_wrong) { //llego ack nuevo yaay
                 strcpy(in1, acks[last_right]); //copiar ultimo ack bueno en in1
                 last_right = (last_right + 1) % MAX_ACKS; //siguiente ack
-                printf("%s\n", in1);
+                printf("%s\n", in1); //printeamos ack jeje
                 ack_num = to_int_seq_inplace(in1); //extraigo numero de secuencia
                 //printf("ack recibido para %d\n", ack_num);
                 if (ack_num != seq_num_out) { //no es el que esperada m3n
@@ -206,6 +235,7 @@ void* bwc_a_bwcs() {
 }
 
 void* bwcs_a_bwc() {
+    //int kk = 0;
     int cnt, next_seq;
     //proceso de recibir datos de bwcs via socket UDP 
     //y escribirlos en bwc via socketTCP
@@ -240,6 +270,8 @@ void* bwcs_a_bwc() {
                 break;
             }
         }
+        //if(kk > 20) return NULL;
+        //else kk++;
     }
     printf("Enviando mensaje final\n");
     Dwrite(sTCP, buffer2, 0); //para cerrar se envia paquete vacio
