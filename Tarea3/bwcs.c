@@ -31,7 +31,7 @@ int last_seen, acks_counter;
 
 // arreglo con acks
 //char acks[MAX_ACKS][DHDR];
-char acks[WIN_SZ*MAX_ACKS][DHDR];
+char acks[WIN_SZ][DHDR];
 int last_wrong, last_right; //contadores de ack esperado para arreglo de acks
 
 int contador;
@@ -41,7 +41,6 @@ int bytes, cont, packs; //contador de bytes, lecturas/escrituras, packs enviados
 int sTCP, sUDP;//identificador del servidor
 int seq_num_out, seq_num_in; //numeros de secuencia de salida y entrada
 int ini_win_seq_num, end_win_seq_num;
-fd_set rfds; //???
 int retval;
 
 pthread_mutex_t reading;
@@ -123,8 +122,8 @@ void resend_all_packets (int id) {
 void* bwc_a_bwcs() {
     //int kk = 0;
     signal (SIGALRM, resend_all_packets);
-    int ack_num, not_acked = 1;
-    int all_read = 0;
+    int ack_num, not_acked = 1, diff;
+    int all_read = 0, last_msg = 0;
     //struct timeval ti, curr_time;
     timeout = 1; 
     int i = 0; //se pone por defecto en 1 para que se envie todo al principio
@@ -147,18 +146,10 @@ void* bwc_a_bwcs() {
         while(!all_read && inside < WIN_SZ) { //llenamos paquetes para enviar a ventana
             printf("ping\n");            
             int c = Dread(sTCP, out1 + DHDR, BUFFER_LENGTH);
-            if(c <= 0) { //leer desde bwc 00000
-                fprintf(stderr, "FIN DE LECTURA DESDE TCP\n");
-                printf("Enviando fin de mensajes\n");
-                cnt[next_pos] = 0;
-                //strcpy(buffer1[next_pos] + DHDR, out1 + DHDR, c);
-                to_char_seq_inplace(ini_win_seq_num + inside, buffer1[next_pos]); //se escribe numero de secuencia en paquete                                    
-                write(sUDP, buffer1[next_pos], DHDR); //paquete de cierre
-                inside++;                
+            if(c <= 0) { //leer desde bwc 00000            
                 all_read = 1;
                 break; //no hay mas que recibir
             }
-            next_pos %= WIN_SZ;
             cnt[next_pos] = c;
             strncpy(buffer1[next_pos] + DHDR, out1 + DHDR, c);            
             printf("En ventana: %d\n", inside);
@@ -167,9 +158,23 @@ void* bwc_a_bwcs() {
             write(sUDP, buffer1[next_pos], cnt[next_pos] + DHDR); //enviar datos al servidor
             printf("Esperando ack de %d\n", ini_win_seq_num + inside);
             //printf("Entran %d bytes, contenido: %s\n", cnt[next_pos], buffer1[next_pos]);
-            next_pos++; inside++;
+            next_pos = (next_pos + 1) % WIN_SZ; inside++;
         }
-        if(inside == 0) break; //no queda nah mas que enviar
+
+        if(inside == 0 && all_read && !last_msg) {
+            fprintf(stderr, "FIN DE LECTURA DESDE TCP\n");
+            printf("Enviando fin de mensajes\n");
+            cnt[next_pos] = 0;
+            //strcpy(buffer1[next_pos] + DHDR, out1 + DHDR, c);
+            to_char_seq_inplace(ini_win_seq_num + inside, buffer1[next_pos]); //se escribe numero de secuencia en paquete                                    
+            write(sUDP, buffer1[next_pos], DHDR); //paquete de cierre
+            inside++;
+            last_msg = 1;
+        }
+
+        if(inside == 0) {
+            break; //no queda nah mas que enviar
+        }
 
         fprintf(stderr, "Traspasando de sTCP a sUDP\n");
         do { //hacer esto mientras no llegue ack esperado    
@@ -182,14 +187,19 @@ void* bwc_a_bwcs() {
                     printf("%s\n", in1);
                     ack_num = to_int_seq_inplace(in1); //extraigo numero de secuencia
                     printf("ack recibido para %d\n", ack_num);
-                    if (ack_num != ini_win_seq_num) { //no es el que esperada m3n
+                    if (ack_num < ini_win_seq_num || ack_num > end_win_seq_num) { //no es el que esperada m3n
+                        if (last_msg) {
+                            printf("Reenviando ultimo mensaje\n");
+                            last_msg = 0;
+                        }
                         printf("ack distinto al esperado: %d\n", ini_win_seq_num);
                         break;
                     } else { //me llego mi amiwo ack esperado
                         printf("Llego, movemos ventana\n");
                         alarm(0); //desactivo solo por prrrrecaucion
-                        ini_win_seq_num++; end_win_seq_num++; //movemos ventana                        
-                        inside--;
+                        diff = ack_num - ini_win_seq_num;
+                        ini_win_seq_num = ack_num + 1; end_win_seq_num = ini_win_seq_num + WIN_SZ; //movemos ventana                        
+                        inside -= diff + 1;
                         printf("Inicio: %d, Final: %d\n", ini_win_seq_num, ini_win_seq_num + inside);
                         curr_pos = (curr_pos + 1) % WIN_SZ;
                         not_acked = 0; //has been acked c:
