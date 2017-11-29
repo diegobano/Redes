@@ -1,0 +1,16 @@
+# Para Linux agregar -lrt
+CC=gcc
+CFLAGS=-g # -m32
+
+BIN=bwc bws bwcs bwss
+
+all: $(BIN)
+
+bwc: bwc.o jsocket6.4.o Data-tcp.o jsocket6.4.h Data.h
+	$(CC) $(CFLAGS) bwc.o jsocket6.4.o Data-tcp.o -o $@ -lpthread 
+
+bws: bws.o jsocket6.4.o Data-tcp.o jsocket6.4.h Data.h
+	$(CC) $(CFLAGS) bws.o jsocket6.4.o Data-tcp.o -o $@ -lpthread 
+
+cleanall: 
+	rm -f $(BIN) *.o
