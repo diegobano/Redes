@@ -36,7 +36,7 @@ int timeout = WIN_SZ;
 int next_seq_num_ttu = 0, seq_num_utt = 0, seq_num_window = 0,
     seq_num_retransmit = 0, seq_num_last = -1;
 int fast_retransmit = 0, RETRANSMIT = 0;
-int retries = 0, end_reached = 0, empty_received = 0;
+int retries = 0, end_reached = 0, empty_received = 0, acks_not_confirmed = 0;
 
 int debug = 0;
 
@@ -53,14 +53,14 @@ void handler() {
   //alarm(TIMEOUT);
 }
 
-void killed() {
+void killed() {  
   pthread_mutex_destroy(&mutex);
   pthread_mutex_destroy(&window_mutex);
   pthread_cond_destroy(&window_cond);
   close(s2_tcp);
   close(s_tcp);
   close(s_udp);
-  printf("\n");
+  printf("\nKilled\n");
   exit(1);
 }
 
@@ -77,18 +77,6 @@ void int_to_string(int seq, char *buf) {
     buf[i] = (res % 10) + '0';
     res /= 10;
   }
-}
-
-void udp_write(int fd, char *buf, int count, int *seq_num) {
-  if (debug) {
-    printf("TCPread: sending DATA seq=%i\n", *seq_num);
-    if (window_size > 0)
-      printf("win: (%i)\n", window_size);
-    else
-      printf("empty win\n");
-  }
-  write(fd, buf, count);
-  *seq_num = (*seq_num + 1) % MAX_SEQ;
 }
 
 //depreca3
@@ -131,10 +119,22 @@ void window_write(char *buf, int count, int seq) {
   window_ttu_sizes[window_in] = count;
   window_ttu_seqs[window_in] = seq;
   window_ttu_confirmed[window_in] = 0;
-  window_ttu_confirmed[seq] = 0;
+  window_utt_confirmed[seq] = 0;
   window_in = (window_in + 1) % WIN_SZ;
   window_size++;
   pthread_mutex_unlock(&window_mutex);
+}
+
+void udp_write(int fd, char *buf, int count, int *seq_num) {
+  if (debug) {
+    printf("TCPread: sending DATA seq=%i\n", *seq_num);
+    if (window_size > 0)
+      printf("win: (%i)\n", window_size);
+    else
+      printf("empty win\n");
+  }
+  write(fd, buf, count);
+  *seq_num = (*seq_num + 1) % MAX_SEQ;
 }
 
 //manejo de timeout por paquete
@@ -142,6 +142,7 @@ void *manage_packet(void* arguments) {
 
   Args* args = (Args*) arguments;
   int win_index = args->win_index;
+  int debug_timeout = 0, debug_retrans = 0;
   struct timeval ti, curr_time;  
   do {    
             
@@ -149,21 +150,29 @@ void *manage_packet(void* arguments) {
     while (1) {
       gettimeofday(&curr_time, NULL);
       // si se envio "senhal" de retransmision y manejo el primer paquete
-      if(RETRANSMIT && win_index == window_out){
-        if (debug)
-          printf("Re-send DATA, seq=%i", window_ttu_seqs[win_index]);
-        RETRANSMIT = 0;
+      if(RETRANSMIT && win_index == window_out){        
+        RETRANSMIT = 0; debug_retrans = 0;
         break;
       }    
       if (curr_time.tv_sec - ti.tv_sec >= TIMEOUT || window_ttu_confirmed[win_index] == 1) {
-        if (debug)
-          printf("TIMEOUT para n°: %d\n", window_ttu_seqs[win_index]);
+        debug_timeout = 1;
         break;
       }      
     }
-
-    if(window_ttu_confirmed[win_index] == 0) //si no ha sido confirmado, hubo timeout      
-      write(s_udp, window_ttu[win_index], window_ttu_sizes[win_index]);    
+    pthread_mutex_lock(&mutex);
+    if(window_ttu_confirmed[win_index] == 0){ //si no ha sido confirmado, hubo timeout 
+      if (debug){
+        if (debug_timeout){
+          debug_timeout = 0;
+          printf("TIMEOUT para n°: %d\n", window_ttu_seqs[win_index]);
+        } else if(debug_retrans){
+          debug_retrans = 1;
+          printf("Re-send DATA, seq=%i", window_ttu_seqs[win_index]);
+        }
+      }          
+      write(s_udp, window_ttu[win_index], window_ttu_sizes[win_index]);
+    }    
+    pthread_mutex_unlock(&mutex);
 
   } while (window_ttu_confirmed[win_index] == 0);
   free(args);
@@ -183,8 +192,9 @@ void *tcp_to_udp() {
       printf("TCPread: %i bytes\n", cnt);
     if (cnt == 0)
       seq_num_last = next_seq_num_ttu;
-    if (cnt <= 0)
+    if (cnt <= 0){
       break;
+    }
 
     Args *args = (Args *) malloc(sizeof(Args)); args->win_index = window_in;
     window_write(buffer_ttu, cnt + DHDR, next_seq_num_ttu);  
@@ -197,8 +207,14 @@ void *tcp_to_udp() {
     
   }
   // size 0 write
+  Args *args = (Args *) malloc(sizeof(Args)); args->win_index = window_in;
   window_write(buffer_ttu, DHDR, next_seq_num_ttu);
   udp_write(s_udp, buffer_ttu, DHDR, &next_seq_num_ttu);
+
+  if (pthread_create(&window_threads[args->win_index], NULL, manage_packet, (void *) args) < 0) {
+      perror("pthread_create");
+      exit(1);
+    }
   printf("TCPread: recibo EOF desde TCP\n");
   return NULL;
 }
@@ -224,7 +240,12 @@ void *udp_to_tcp() {
     if (end_reached) {
       // 0 size package to close tcp
       Dwrite(s2_tcp, NULL, 0);
+      int i;
+      for (i = 0; i < seq_num_last; ++i){
+        printf("ack confirmed[%i]: %i\n", i, window_utt_confirmed[i]);
+      }
       if (select(s_udp + 1, &fds, NULL, NULL, &tv)) {
+        printf("asdasdadas\n");
         cnt = read(s_udp, buffer_utt, BUFFER_LENGTH + DHDR);
       } else {
         if (debug)
@@ -237,14 +258,18 @@ void *udp_to_tcp() {
     //se leyo
     if (debug)
       printf("UDPread: recv largo=%i\n", cnt);
-    if (cnt <= 0)
+    if (cnt <= 0){
+      printf("UDPread: LEL cnt = %i\n",cnt);
       break;
+    }
 
     int seq_num = string_to_int(buffer_utt + DSEQ);
 
     if (buffer_utt[0] == 'A') { //acknowledgment
-      if (cnt - DHDR < 0)
+      if (cnt - DHDR < 0){
+        printf("UDPread: ACK cnt - HDR = %i\n",cnt - DHDR);
         break;
+      }
       if (debug)
         printf("UDPread: recv ACK seq=%i, expected_ack=%i\n", seq_num, seq_num_window);
 
@@ -256,36 +281,34 @@ void *udp_to_tcp() {
       // si ack es mayor o igual al esperado 
       // o si el siguiente a ack a asignar este entre el recibido y el esperado
       if (seq_num >= seq_num_window || (seq_num < next_seq_num_ttu && next_seq_num_ttu < seq_num_window)) {
-
+        
         if(debug)
-          printf("Reception of packet %i confirmed.\n", seq_num);
+          printf("Reception of packet %i confirmed\n", seq_num);
 
         window_ttu_confirmed[seq_num % WIN_SZ] = 1 ;
 
         int diff = 0;
-        if (seq_num == seq_num_window) //se puede mover la ventana c:
+        if (seq_num == seq_num_window){ //se puede mover la ventana c:
           //se busca siguiente paquete aun no confirmado
           while(window_ttu_confirmed[(window_out + diff) % WIN_SZ] != 0){
             diff++;
-            pthread_join(window_threads[(window_out + diff) % WIN_SZ], NULL);
+            pthread_join(window_threads[(window_out + diff) % WIN_SZ], NULL);            
           }
-        else //no se puede mover dado que primer paquete de la ventana no esta confirmado aun
-          diff = -1;
 
-        //int diff = (MAX_SEQ + seq_num - seq_num_window) % MAX_SEQ; //diferencia entre el recibido y el esperado
-        pthread_mutex_lock(&window_mutex);
-        window_out = (window_out + diff) % WIN_SZ; //se actualiza inicio de ventana
-        window_size -= diff; //se achica tamaño de ventana
-        pthread_cond_broadcast(&window_cond);
-        pthread_mutex_unlock(&window_mutex);
+          pthread_mutex_lock(&window_mutex);
+          window_out = (window_out + diff) % WIN_SZ; //se actualiza inicio de ventana
+          window_size -= diff; //se achica tamaño de ventana
+          pthread_cond_broadcast(&window_cond);
+          pthread_mutex_unlock(&window_mutex);
 
-        if (debug) {
-          if (window_size > 0)
-            printf("win: (%i)\n", window_size);
-          else
-            printf("empty win\n");
+          if (debug) {
+            if (window_size > 0)
+              printf("win: (%i)\n", window_size);
+            else
+              printf("empty win\n");
+          }
+          seq_num_window = (seq_num_window + diff) % MAX_SEQ; //se actualiza nuevo ack esperado
         }
-        seq_num_window = (seq_num_window + diff) % MAX_SEQ; //se actualiza nuevo ack esperado
 
       } /* seq_num >= seq_num_window || (seq_num < next_seq_num_ttu && next_seq_num_ttu < seq_num_window) */
       else {
@@ -310,8 +333,10 @@ void *udp_to_tcp() {
       }
     } /* buffer_utt[0] == 'A' */
     else if (buffer_utt[0] == 'D') { //si recibimos datos
-      if (cnt - DHDR < 0)
+      if (cnt - DHDR < 0){
+        printf("UDPread: DATA cnt - HDR = %i\n",cnt - DHDR);
         break;
+      }
       if (debug)
         printf("UDPread: DATA: seq=%i, expected_seq=%i\n", seq_num, seq_num_utt);
 
@@ -328,8 +353,11 @@ void *udp_to_tcp() {
           empty_received = 1;
         else {          
           if(window_utt_confirmed[seq_num] == 0){ //si paquete no habia sido recibido antes
+            pthread_mutex_lock(&mutex);
             window_utt_confirmed[seq_num] = 1;
             packets_received++;
+            pthread_mutex_unlock(&mutex);
+            printf("Reception of packet %i >= %i confirmed, packets: %i/%i\n", seq_num, seq_num_utt - 1, packets_received, seq_num_last);
           }
           Dwrite(s2_tcp, buffer_utt + DHDR, cnt - DHDR); //escribir en tcp
         } 
@@ -337,10 +365,14 @@ void *udp_to_tcp() {
         if (debug)
           printf("UDPread: DATA fuera de rango, envío ACK para %i\n", (MAX_SEQ + seq_num_utt - 1) % MAX_SEQ);
         write(s_udp, buffer_ack, DHDR);
+        
       }      
-      if (empty_received && seq_num_last == packets_received) end_reached = 1;
+      if (empty_received && seq_num_last == packets_received){
+        printf("YEEEEEI\n");
+        end_reached = 1;}
     }
   }
+  printf("FIIIIIN\n");
   return NULL;
 }
 
