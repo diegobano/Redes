@@ -18,7 +18,8 @@ char window_ttu[WIN_SZ][BUFFER_LENGTH + DHDR];
 int window_ttu_sizes[WIN_SZ];
 int window_ttu_seqs[WIN_SZ];
 int window_ttu_confirmed[WIN_SZ]; //nueva ventana para manejar acks que ya han sido recibidos
-int window_utt_confirmed[MAX_SEQ]; //nueva ventana para manejar acks que ya han sido recibidos
+char window_utt[WIN_SZ][BUFFER_LENGTH + DHDR];
+int window_utt_confirmed[MAX_SEQ]; //nueva ventana para manejar paquetes enviados
 int window_end = 0, window_init = 0, window_size = 0;
 pthread_mutex_t window_mutex;
 pthread_cond_t window_cond;
@@ -235,7 +236,7 @@ void *close_phase() {
   next_seq_num: siguiente numero de secuencia a asignar
 */
 void *udp_to_tcp() {
-  int cnt, packets_received = 0, acks_received = 0;
+  int cnt, packets_received = 0, acks_received = 0, last_written = 0;
   
   for (;;) {
 
@@ -343,9 +344,17 @@ void *udp_to_tcp() {
               window_utt_confirmed[seq_num] = 1;
               packets_received++;
               pthread_mutex_unlock(&mutex);
-              printf("Reception of packet %i >= %i confirmed, packets: %i/%i\n", 
-                seq_num, seq_num_utt - 1, packets_received, seq_num_last);
-              Dwrite(s2_tcp, buffer_utt + DHDR, cnt - DHDR); //escribir en tcp
+              if(debug)
+                printf("Reception of packet %i >= %i confirmed, packets: %i/%i\n", 
+                  seq_num, seq_num_utt - 1, packets_received, seq_num_last);
+              memcpy(window_ttu[seq_num % WIN_SZ], buffer_utt + DHDR, cnt - DHDR);
+
+              while(window_utt_confirmed[last_written]) {
+                Dwrite(s2_tcp, window_ttu[last_written % WIN_SZ], cnt - DHDR); //escribir en tcp
+                if(debug)
+                  printf("TCPWrite: writing back %i\n", last_written);
+                last_written = (last_written + 1) % MAX_SEQ;
+              }
             }                      
         } else {
           int_to_string(seq_num, buffer_ack + DSEQ); // seq num header ack
