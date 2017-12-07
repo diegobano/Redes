@@ -98,7 +98,7 @@ void window_write(char *buf, int count, int seq) {
 
 void udp_write(int fd, char *buf, int count, int *seq_num) {
   if (debug) {
-    printf("TCPread: sending DATAAA seq=%i\n", *seq_num);
+    printf("TCPread: sending DATA seq=%i\n", *seq_num);
     if (window_size > 0)
       printf("win: (%i)\n", window_size);
     else
@@ -216,7 +216,7 @@ void *close_phase() {
 
     if (buffer_utt[0] == 'D') { //si recibimos datos
       if (cnt - DHDR < 0){
-        printf("UDPread: ACK cnt - HDR = %i\n",cnt - DHDR);
+        printf("UDPread: ACK cnt= %i\n",cnt - DHDR);
         break;
       } else{
           if (debug)
@@ -251,7 +251,7 @@ void *udp_to_tcp() {
     if (debug)
       printf("UDPread: recv largo=%i\n", cnt);
     if (cnt <= 0) {
-      printf("UDPread: LEL cnt = %i\n",cnt);
+      printf("UDPread: recv cnt=%i\n", cnt);
       break;
     }
 
@@ -260,7 +260,7 @@ void *udp_to_tcp() {
     /* ACKNOWLEDGEMENT*/
     if (buffer_utt[0] == 'A') { //acknowledgment
       if (cnt - DHDR < 0){
-        printf("UDPread: ACK cnt - HDR = %i\n",cnt - DHDR);
+        printf("UDPread: ACK cnt = %i\n",cnt - DHDR);
         break;
       } else {
         if (debug)
@@ -319,7 +319,7 @@ void *udp_to_tcp() {
     } /* buffer_utt[0] == 'A' */
     else if (buffer_utt[0] == 'D') { //si recibimos datos
       if (cnt - DHDR < 0){
-        printf("UDPread: ACK cnt - HDR = %i\n",cnt - DHDR);
+        printf("UDPread: ACK cnt=%i\n",cnt - DHDR);        
         break;
       } else{
         if (debug)
@@ -345,7 +345,7 @@ void *udp_to_tcp() {
               packets_received++;
               pthread_mutex_unlock(&mutex);
               if(debug)
-                printf("Reception of packet %i >= %i confirmed, packets: %i/%i\n", 
+                printf("Reception of packet %i confirmed, expected: %i, packets: %i/%i\n", 
                   seq_num, seq_num_utt - 1, packets_received, seq_num_last);
               memcpy(window_ttu[seq_num % WIN_SZ], buffer_utt + DHDR, cnt - DHDR);
 
