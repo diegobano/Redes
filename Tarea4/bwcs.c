@@ -118,14 +118,11 @@ void *manage_packets() {
   do {
     gettimeofday(&curr_time, NULL);
     if(RETRANSMIT){
-      RETRANSMIT = 0;
-      if(debug)
-        printf("Re-send DATA, seq=%i\n", window_ttu_seqs[window_init]);
-      write(s_udp, window_ttu[window_init], window_ttu_sizes[window_init]);
+      RETRANSMIT = 0;      
       window_ttu_timeouts[window_init] = curr_time;
     } else {
       int i = window_init, end = window_end;      
-      for (; i < end; i++) {        
+      for (; i < end && !RETRANSMIT; i++) {        
         // si se envio "senhal" de retransmision y manejo el primer paquete
         pthread_mutex_lock(&window_mutex);
         struct timeval ti = window_ttu_timeouts[i];
@@ -176,8 +173,7 @@ void *tcp_to_udp() {
   // size 0 write
   window_write(buffer_ttu, DHDR, next_seq_num);
   udp_write(s_udp, buffer_ttu, DHDR, &next_seq_num);
-  printf("TCPread: recibo EOF desde TCP\n");
-  pthread_join(timeout_t, NULL);
+  printf("TCPread: recibo EOF desde TCP\n");  
   return NULL;
 }
 
@@ -194,9 +190,10 @@ void *close_phase() {
   // 0 size package to close tcp
   Dwrite(s2_tcp, NULL, 0);
   for(;;) {
-    if (select(s_udp + 1, &fds, NULL, NULL, &tv)) {
-      printf("UDPread: select \n");
+    if (select(s_udp + 1, &fds, NULL, NULL, &tv)) {      
       cnt = read(s_udp, buffer_utt, BUFFER_LENGTH + DHDR);
+      if(debug)
+        printf("UDPread: select, cnt=%i\n", cnt);
     } else {
       if (debug)
         printf("nada más que leer y conexion cerrada, chao!\n");
@@ -306,6 +303,10 @@ void *udp_to_tcp() {
               // max number of acks for this retransmit
               fast_retransmit = 0;
               RETRANSMIT = 1; //se retransmite solo primer paquete
+              int index = window_init == window_end? window_end - 1: window_init;
+              if(debug)
+                printf("Re-send DATA, seq=%i, win_init=%i\n", window_ttu_seqs[index], index);
+              write(s_udp, window_ttu[index], window_ttu_sizes[index]);
           }
         }
       }
@@ -455,6 +456,7 @@ int main(int argc, char *argv[]) {
   tcp_to_udp();
 
   pthread_join(utt, NULL);
+  pthread_join(timeout_t, NULL);
   printf("Murió hijo\n");
 
   pthread_mutex_destroy(&mutex);

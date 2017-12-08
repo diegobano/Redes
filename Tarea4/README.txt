@@ -45,14 +45,14 @@ write 718544 bytes in 0.000746965 seconds at 7339.1 Mbps, 513 packs
 ===============================================================================
 L=0.0% D=300ms
 ----bwc:
-write 718544 bytes in 0.00417995 seconds at 1311.51 Mbps
-read 718544 bytes in 2.40227 seconds at 2.28203 Mbps
+write 718544 bytes in 0.000746012 seconds at 7348.48 Mbps
+read 718544 bytes in 1.80157 seconds at 3.04294 Mbps
 
-throughput total: 1437088 bytes in 8.41462 seconds at 1.30298 Mbps
+throughput total: 1437088 bytes in 7.81054 seconds at 1.40376 Mbps
 
 ----bws:
-read 718544 bytes in 7.98145 seconds at 0.686849 Mbps, 514 packs
-write 718544 bytes in 0.00069809 seconds at 7852.94 Mbps, 513 packs
+read 718544 bytes in 11.4483 seconds at 0.478855 Mbps, 514 packs
+write 718544 bytes in 0.000720978 seconds at 7603.64 Mbps, 513 packs
 ===============================================================================
 L=20.0% D=0ms
 write 718544 bytes in 0.000825882 seconds at 6637.82 Mbps
