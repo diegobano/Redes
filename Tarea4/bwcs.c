@@ -23,12 +23,13 @@ char window_utt[WIN_SZ][BUFFER_LENGTH + DHDR];
 int window_utt_confirmed[MAX_SEQ]; //nueva ventana para manejar paquetes enviados
 int window_end = 0, window_init = 0, window_size = 0;
 pthread_mutex_t window_mutex;
-pthread_cond_t window_cond;
+pthread_cond_t window_cond, end_cond;
+
 
 int s_tcp, s2_tcp, s_udp;
 pthread_mutex_t mutex;
 pthread_t ttu, utt, timeout_t;
-int timeout = WIN_SZ;
+int send_last_packet = 0, timeout = WIN_SZ;
 
 /*
   next_seq_num: next seq_num available to use
@@ -58,6 +59,7 @@ void killed() {
   pthread_mutex_destroy(&mutex);
   pthread_mutex_destroy(&window_mutex);
   pthread_cond_destroy(&window_cond);
+  pthread_cond_destroy(&end_cond);
   close(s2_tcp);
   close(s_tcp);
   close(s_udp);
@@ -114,15 +116,15 @@ void *manage_packets() {
 
   struct timeval curr_time;  
   do {
+    gettimeofday(&curr_time, NULL);
     if(RETRANSMIT){
       RETRANSMIT = 0;
       if(debug)
-        printf("Re-send DATA, seq=%i", window_ttu_seqs[window_init]);
+        printf("Re-send DATA, seq=%i\n", window_ttu_seqs[window_init]);
       write(s_udp, window_ttu[window_init], window_ttu_sizes[window_init]);
-      window_ttu_timeouts[window_init].tv_sec = gettimeofday(&curr_time, NULL);
+      window_ttu_timeouts[window_init] = curr_time;
     } else {
-      int i = window_init, end = window_end;
-      gettimeofday(&curr_time, NULL);
+      int i = window_init, end = window_end;      
       for (; i < end; i++) {        
         // si se envio "senhal" de retransmision y manejo el primer paquete
         pthread_mutex_lock(&window_mutex);
@@ -133,7 +135,7 @@ void *manage_packets() {
           if (debug)
             printf("TIMEOUT para n°: %d\n", window_ttu_seqs[i]);                          
           write(s_udp, window_ttu[i], window_ttu_sizes[i]);
-          window_ttu_timeouts[i].tv_sec = gettimeofday(&curr_time, NULL);
+          window_ttu_timeouts[i] = curr_time;
         }         
         pthread_mutex_unlock(&mutex); 
       }
@@ -167,6 +169,10 @@ void *tcp_to_udp() {
     udp_write(s_udp, buffer_ttu, cnt + DHDR, &next_seq_num);
     
   }
+/*
+  while(!send_last_packet)
+    pthread_cond_wait(&window_cond, &window_mutex);
+*/
   // size 0 write
   window_write(buffer_ttu, DHDR, next_seq_num);
   udp_write(s_udp, buffer_ttu, DHDR, &next_seq_num);
@@ -236,8 +242,9 @@ void *udp_to_tcp() {
     if (debug)
       printf("UDPread: recv largo=%i\n", cnt);
     if (cnt <= 0) {
+      end_reached = 1;
       printf("UDPread: recv cnt=%i\n", cnt);
-      break;
+      return close_phase();
     }
 
     int seq_num = string_to_int(buffer_utt + DSEQ);
@@ -245,8 +252,9 @@ void *udp_to_tcp() {
     /* ACKNOWLEDGEMENT*/
     if (buffer_utt[0] == 'A') { //acknowledgment
       if (cnt - DHDR < 0){
+        end_reached = 1;
         printf("UDPread: ACK cnt = %i\n",cnt - DHDR);
-        break;
+        return close_phase();
       } else {
         if (debug)
           printf("UDPread: recv ACK seq=%i, expected_ack=%i\n", seq_num, expected_seq_num);
@@ -304,7 +312,9 @@ void *udp_to_tcp() {
     } /* buffer_utt[0] == 'A' */
     else if (buffer_utt[0] == 'D') { //si recibimos datos
       if (cnt - DHDR < 0){
+        end_reached = 1;
         printf("UDPread: ACK cnt=%i\n",cnt - DHDR);        
+        return close_phase();
         break;
       } else{
         if (debug)
@@ -323,6 +333,7 @@ void *udp_to_tcp() {
           if (cnt - DHDR == 0 && !empty_received){            
             if (debug)
               printf("UDPread: empty packet received\n");
+            window_utt_confirmed[seq_num] = 1;
             empty_received = 1;
           } else if(!window_utt_confirmed[seq_num]) { //si paquete no habia sido recibido antes
               pthread_mutex_lock(&mutex);
@@ -347,8 +358,10 @@ void *udp_to_tcp() {
             printf("UDPread: DATA fuera de rango, envío ACK para %i\n", seq_num);
           write(s_udp, buffer_ack, DHDR);
           
-        }      
-        if (empty_received && seq_num_last == packets_received && seq_num_last == acks_received - 1){
+        }
+        if (empty_received && seq_num_last == packets_received && seq_num_last == acks_received - 1) {
+          //send_last_packet = 1;
+          //pthread_cond_broadcast(&end_cond);
           if (debug)
               printf("UDPread: end reached\n");  
           end_reached = 1;
@@ -406,6 +419,11 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  if (pthread_cond_init(&end_cond, NULL) != 0) {
+    fprintf(stderr, "Condition init failed\n");
+    return 1;
+  }
+
   // UDP
   s_udp = j_socket_udp_connect(server, port_udp);
   if (s_udp < 0) {
@@ -443,6 +461,7 @@ int main(int argc, char *argv[]) {
 
   pthread_mutex_destroy(&window_mutex);
   pthread_cond_destroy(&window_cond);
+  pthread_cond_destroy(&end_cond);
 
   close(s2_tcp);
   close(s_tcp);
